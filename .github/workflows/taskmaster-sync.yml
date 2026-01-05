@@ -1,7 +1,9 @@
-# Task Master → GitHub Issues Sync
-# This GitHub Action watches .taskmaster/tasks.json and syncs changes to GitHub Issues
+# Task Master → GitHub Issues + Plane Sync
+# This GitHub Action watches .taskmaster/tasks.json and syncs to GitHub Issues AND Plane
+# Install: Copy to .github/workflows/taskmaster-sync.yml in your repository
+# Required secrets: PLANE_API_KEY (optional, for Plane sync)
 
-name: Sync Task Master to GitHub Issues
+name: Sync Task Master to GitHub Issues + Plane
 
 on:
   push:
@@ -15,6 +17,11 @@ on:
     inputs:
       force_sync:
         description: 'Force sync all tasks (ignore cache)'
+        required: false
+        default: 'false'
+        type: boolean
+      skip_plane:
+        description: 'Skip Plane sync (GitHub only)'
         required: false
         default: 'false'
         type: boolean
@@ -38,6 +45,7 @@ jobs:
           node-version: '20'
 
       - name: Sync Task Master to GitHub Issues
+        id: github-sync
         uses: actions/github-script@v7
         env:
           FORCE_SYNC: ${{ github.event.inputs.force_sync || 'false' }}
@@ -45,6 +53,7 @@ jobs:
           script: |
             const fs = require('fs');
             
+            // Status mapping: Task Master → GitHub
             const STATUS_MAP = {
               'pending': { state: 'open', labels: ['tm-task', 'tm-pending'] },
               'in-progress': { state: 'open', labels: ['tm-task', 'tm-in-progress'] },
@@ -74,6 +83,9 @@ jobs:
               console.log('No tasks array found');
               return;
             }
+            
+            // Store tasks for Plane sync step
+            core.setOutput('tasks_json', JSON.stringify(tasks.tasks));
             
             const requiredLabels = [
               { name: 'tm-task', color: '0366d6', description: 'Task Master synced task' },
@@ -129,7 +141,6 @@ jobs:
             for (const task of tasks.tasks) {
               const taskId = String(task.id);
               const statusConfig = STATUS_MAP[task.status] || STATUS_MAP['pending'];
-              
               const labels = [...statusConfig.labels];
               if (task.priority && PRIORITY_LABELS[task.priority]) {
                 labels.push(PRIORITY_LABELS[task.priority]);
@@ -149,7 +160,20 @@ jobs:
                 depsMarkdown = `**Dependencies:** ${task.dependencies.map(d => `#${d}`).join(', ')}\n\n`;
               }
               
-              const body = `## Task Master Task #${taskId}\n\n**Status:** ${task.status}\n**Priority:** ${task.priority || 'medium'}\n${depsMarkdown}\n### Description\n${task.description || task.title}\n\n### Details\n${task.details || '_No additional details_'}\n${subtasksMarkdown}\n---\n*Synced from Task Master AI*\n<!-- tm:${taskId} -->`;
+              const body = `## Task Master Task #${taskId}
+
+**Status:** ${task.status}
+**Priority:** ${task.priority || 'medium'}
+${depsMarkdown}
+### Description
+${task.description || task.title}
+
+### Details
+${task.details || '_No additional details_'}
+${subtasksMarkdown}
+---
+*Synced from Task Master AI*
+<!-- tm:${taskId} -->`;
               
               const existingIssueNumber = taskIssueMap.get(taskId);
               
@@ -186,3 +210,130 @@ jobs:
             }
             
             console.log(`Synced ${tasks.tasks.length} tasks to GitHub Issues`);
+
+      - name: Sync to Plane
+        if: ${{ github.event.inputs.skip_plane != 'true' && vars.PLANE_WORKSPACE_SLUG != '' }}
+        env:
+          PLANE_API_KEY: ${{ secrets.PLANE_API_KEY }}
+          PLANE_BASE_URL: ${{ vars.PLANE_BASE_URL || 'https://plane.ethospower.org' }}
+          PLANE_WORKSPACE_SLUG: ${{ vars.PLANE_WORKSPACE_SLUG }}
+          PLANE_PROJECT_ID: ${{ vars.PLANE_PROJECT_ID }}
+        run: |
+          # Read tasks from file (more reliable than output for large data)
+          TASKS_FILE=".taskmaster/tasks.json"
+          
+          if [ ! -f "$TASKS_FILE" ]; then
+            echo "No tasks.json found, skipping Plane sync"
+            exit 0
+          fi
+          
+          if [ -z "$PLANE_API_KEY" ]; then
+            echo "PLANE_API_KEY secret not set, skipping Plane sync"
+            exit 0
+          fi
+          
+          if [ -z "$PLANE_PROJECT_ID" ]; then
+            echo "PLANE_PROJECT_ID variable not set, skipping Plane sync"
+            exit 0
+          fi
+          
+          echo "Syncing to Plane workspace: $PLANE_WORKSPACE_SLUG"
+          
+          # Get project states for status mapping
+          STATES=$(curl -s -H "X-API-Key: $PLANE_API_KEY" \
+            "$PLANE_BASE_URL/api/v1/workspaces/$PLANE_WORKSPACE_SLUG/projects/$PLANE_PROJECT_ID/states/")
+          
+          # Extract state IDs
+          BACKLOG_STATE=$(echo "$STATES" | jq -r '.results[] | select(.group == "backlog") | .id' | head -1)
+          TODO_STATE=$(echo "$STATES" | jq -r '.results[] | select(.group == "unstarted") | .id' | head -1)
+          INPROGRESS_STATE=$(echo "$STATES" | jq -r '.results[] | select(.group == "started") | .id' | head -1)
+          DONE_STATE=$(echo "$STATES" | jq -r '.results[] | select(.group == "completed") | .id' | head -1)
+          CANCELLED_STATE=$(echo "$STATES" | jq -r '.results[] | select(.group == "cancelled") | .id' | head -1)
+          
+          echo "State IDs: Backlog=$BACKLOG_STATE, Todo=$TODO_STATE, InProgress=$INPROGRESS_STATE, Done=$DONE_STATE"
+          
+          # Get existing work items to check for updates vs creates
+          EXISTING=$(curl -s -H "X-API-Key: $PLANE_API_KEY" \
+            "$PLANE_BASE_URL/api/v1/workspaces/$PLANE_WORKSPACE_SLUG/projects/$PLANE_PROJECT_ID/work-items/?per_page=100")
+          
+          # Process each task
+          jq -c '.tasks[]' "$TASKS_FILE" | while read -r task; do
+            TASK_ID=$(echo "$task" | jq -r '.id')
+            TITLE=$(echo "$task" | jq -r '.title')
+            STATUS=$(echo "$task" | jq -r '.status')
+            PRIORITY=$(echo "$task" | jq -r '.priority // "medium"')
+            DESCRIPTION=$(echo "$task" | jq -r '.description // .title')
+            DETAILS=$(echo "$task" | jq -r '.details // ""')
+            
+            # Map Task Master status to Plane state
+            case "$STATUS" in
+              "pending")    STATE_ID="$BACKLOG_STATE" ;;
+              "in-progress") STATE_ID="$INPROGRESS_STATE" ;;
+              "done")       STATE_ID="$DONE_STATE" ;;
+              "blocked")    STATE_ID="$TODO_STATE" ;;
+              "deferred")   STATE_ID="$BACKLOG_STATE" ;;
+              "cancelled")  STATE_ID="$CANCELLED_STATE" ;;
+              "review")     STATE_ID="$INPROGRESS_STATE" ;;
+              *)            STATE_ID="$BACKLOG_STATE" ;;
+            esac
+            
+            # Map priority
+            case "$PRIORITY" in
+              "high")   PLANE_PRIORITY="urgent" ;;
+              "medium") PLANE_PRIORITY="medium" ;;
+              "low")    PLANE_PRIORITY="low" ;;
+              *)        PLANE_PRIORITY="medium" ;;
+            esac
+            
+            # Build description HTML
+            DESC_HTML="<p><strong>Task Master ID:</strong> $TASK_ID</p><p>$DESCRIPTION</p>"
+            if [ -n "$DETAILS" ] && [ "$DETAILS" != "null" ]; then
+              DESC_HTML="$DESC_HTML<h3>Details</h3><p>$DETAILS</p>"
+            fi
+            
+            # Check if work item exists (by external_id or name match)
+            EXISTING_ID=$(echo "$EXISTING" | jq -r --arg tid "tm-$TASK_ID" \
+              '.results[] | select(.external_id == $tid) | .id' | head -1)
+            
+            if [ -z "$EXISTING_ID" ] || [ "$EXISTING_ID" == "null" ]; then
+              # Check by name as fallback
+              EXISTING_ID=$(echo "$EXISTING" | jq -r --arg title "$TITLE" \
+                '.results[] | select(.name == $title) | .id' | head -1)
+            fi
+            
+            # Prepare JSON payload
+            PAYLOAD=$(jq -n \
+              --arg name "$TITLE" \
+              --arg desc "$DESC_HTML" \
+              --arg state "$STATE_ID" \
+              --arg priority "$PLANE_PRIORITY" \
+              --arg extid "tm-$TASK_ID" \
+              '{
+                name: $name,
+                description_html: $desc,
+                state: $state,
+                priority: $priority,
+                external_id: $extid,
+                external_source: "taskmaster"
+              }')
+            
+            if [ -n "$EXISTING_ID" ] && [ "$EXISTING_ID" != "null" ]; then
+              # Update existing work item
+              echo "Updating Plane work item $EXISTING_ID for task $TASK_ID"
+              curl -s -X PATCH \
+                -H "X-API-Key: $PLANE_API_KEY" \
+                -H "Content-Type: application/json" \
+                "$PLANE_BASE_URL/api/v1/workspaces/$PLANE_WORKSPACE_SLUG/projects/$PLANE_PROJECT_ID/work-items/$EXISTING_ID/" \
+                -d "$PAYLOAD" > /dev/null
+            else
+              # Create new work item
+              echo "Creating Plane work item for task $TASK_ID: $TITLE"
+              curl -s -X POST \
+                -H "X-API-Key: $PLANE_API_KEY" \
+                -H "Content-Type: application/json" \
+                "$PLANE_BASE_URL/api/v1/workspaces/$PLANE_WORKSPACE_SLUG/projects/$PLANE_PROJECT_ID/work-items/" \
+                -d "$PAYLOAD" > /dev/null
+            fi
+          done
+          
+          echo "Plane sync complete"
