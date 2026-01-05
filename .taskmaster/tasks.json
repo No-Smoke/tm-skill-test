@@ -4,61 +4,51 @@
       "id": 1,
       "title": "Create GitHub Repository No-Smoke/tm-skill-test",
       "description": "Initialize GitHub repository at No-Smoke/tm-skill-test via MCP to validate repository creation workflow.",
-      "details": "Use MCP (assumed project initiator tool) to create repository 'tm-skill-test' under No-Smoke organization. Add initial README.md with project overview. Configure repository settings for Issues and Actions. Verify repository exists and is accessible.",
-      "testStrategy": "Check GitHub UI: confirm repo exists at No-Smoke/tm-skill-test, README present, Issues enabled, Actions enabled. Clone repo locally to verify access.",
+      "details": "Use MCP to create repository 'tm-skill-test' under No-Smoke organization. Add initial README.md with project overview. Configure repository settings for Issues and Actions.",
       "priority": "high",
       "dependencies": [],
-      "status": "pending",
+      "status": "done",
       "subtasks": []
     },
     {
       "id": 2,
       "title": "Deploy GitHub Actions Workflow for Task Sync",
-      "description": "Create .github/workflows/task-sync.yml to sync Task Master tasks to GitHub Issues bidirectionally.",
-      "details": "Create workflow file in .github/workflows/ with triggers on push, schedule (cron for status sync), and repository_dispatch. Use actions/checkout@v4, setup-node@v4. Implement task→issue creation on Task Master task init, status propagation via API polling or webhooks. Use GitHub API to create/update issues with task metadata. Pin actions to SHAs per best practices.",
-      "testStrategy": "Push workflow file, trigger workflow manually via dispatch event. Verify workflow runs successfully in Actions tab, no syntax errors, jobs complete.",
+      "description": "Create .github/workflows/taskmaster-sync.yml to sync Task Master tasks to GitHub Issues.",
+      "details": "Create workflow file with triggers on push to .taskmaster/tasks.json. Use actions/checkout@v4, setup-node@v4, github-script@v7. Implement task→issue creation with status labels.",
       "priority": "high",
       "dependencies": [1],
-      "status": "pending",
+      "status": "done",
       "subtasks": []
     },
     {
       "id": 3,
       "title": "Initialize Task Master with Test Tasks",
-      "description": "Set up Task Master in project with 3+ sample tasks to test sync functionality.",
-      "details": "Initialize Task Master config file (tm.json or equivalent). Create 3+ tasks covering different statuses (pending, in-progress, done). Include task metadata for GitHub issue titles, descriptions, labels. Ensure tasks have IDs and status fields for sync testing.",
-      "testStrategy": "Verify Task Master init completes, 3+ tasks listed in Task Master UI/CLI. Check task JSON structure has required fields (id, title, status, description).",
+      "description": "Set up Task Master in project with sample tasks to test sync functionality.",
+      "details": "Initialize Task Master config. Parse PRD to generate tasks. Ensure tasks have IDs and status fields for sync testing.",
       "priority": "high",
       "dependencies": [1],
-      "status": "pending",
+      "status": "done",
       "subtasks": []
     },
     {
       "id": 4,
       "title": "Validate Task Master to GitHub Issues Sync",
       "description": "Test automatic creation of GitHub Issues from Task Master tasks and status propagation.",
-      "details": "Trigger Task Master task creation/update. Workflow should: 1) Poll Task Master tasks via API/file watch, 2) Create corresponding GitHub Issues with matching title/description/labels, 3) Update issue status/labels on Task Master status changes. Implement idempotency to avoid duplicates using task IDs.",
-      "testStrategy": "Create/update Task Master tasks, verify corresponding Issues appear in GitHub with correct details. Change task status, confirm issue updates (labels, assignees, state). Check for duplicates or missed syncs.",
+      "details": "Push tasks.json to trigger workflow. Verify Issues created with correct labels. Check status sync works.",
       "priority": "medium",
       "dependencies": [2, 3],
-      "status": "pending",
+      "status": "in-progress",
       "subtasks": []
     },
     {
       "id": 5,
-      "title": "Configure OpenProject Integration and Qdrant Storage",
-      "description": "Set up OpenProject project with tm-op-sync and verify Qdrant metadata storage.",
-      "details": "Create OpenProject project via API/UI. Configure tm-op-sync tool for bidirectional sync between Task Master/GitHub Issues and OpenProject work packages. Initialize Qdrant vector DB instance, store task metadata (embeddings, sync status). Set up Nextcloud folder structure if required for file-based sync.",
-      "testStrategy": "Verify OpenProject project created with work packages matching tasks/issues. Check tm-op-sync logs for successful syncs. Query Qdrant to confirm metadata stored. Test status propagation across all three systems.",
+      "title": "Configure OpenProject Integration",
+      "description": "Set up OpenProject project with tm-op-sync for work package sync.",
+      "details": "Create OpenProject project. Configure tm-op-sync tool. Verify work packages created from tasks.",
       "priority": "medium",
-      "dependencies": [2, 3, 4],
+      "dependencies": [4],
       "status": "pending",
       "subtasks": []
     }
-  ],
-  "metadata": {
-    "projectName": "tm-skill-test",
-    "created": "2026-01-05T06:34:07.195Z",
-    "updated": "2026-01-05T06:34:07.195Z"
-  }
+  ]
 }
