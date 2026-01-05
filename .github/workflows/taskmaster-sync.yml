@@ -149,20 +149,7 @@ jobs:
                 depsMarkdown = `**Dependencies:** ${task.dependencies.map(d => `#${d}`).join(', ')}\n\n`;
               }
               
-              const body = `## Task Master Task #${taskId}
-
-**Status:** ${task.status}
-**Priority:** ${task.priority || 'medium'}
-${depsMarkdown}
-### Description
-${task.description || task.title}
-
-### Details
-${task.details || '_No additional details_'}
-${subtasksMarkdown}
----
-*Synced from Task Master AI*
-<!-- tm:${taskId} -->`;
+              const body = `## Task Master Task #${taskId}\n\n**Status:** ${task.status}\n**Priority:** ${task.priority || 'medium'}\n${depsMarkdown}\n### Description\n${task.description || task.title}\n\n### Details\n${task.details || '_No additional details_'}\n${subtasksMarkdown}\n---\n*Synced from Task Master AI*\n<!-- tm:${taskId} -->`;
               
               const existingIssueNumber = taskIssueMap.get(taskId);
               
