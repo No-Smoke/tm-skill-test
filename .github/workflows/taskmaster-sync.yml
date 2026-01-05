@@ -1,8 +1,4 @@
 # Task Master → GitHub Issues + Plane Sync
-# This GitHub Action watches .taskmaster/tasks.json and syncs to GitHub Issues AND Plane
-# Install: Copy to .github/workflows/taskmaster-sync.yml in your repository
-# Required secrets: PLANE_API_KEY (optional, for Plane sync)
-
 name: Sync Task Master to GitHub Issues + Plane
 
 on:
@@ -12,16 +8,15 @@ on:
     branches:
       - main
       - master
-
   workflow_dispatch:
     inputs:
       force_sync:
-        description: 'Force sync all tasks (ignore cache)'
+        description: 'Force sync all tasks'
         required: false
         default: 'false'
         type: boolean
       skip_plane:
-        description: 'Skip Plane sync (GitHub only)'
+        description: 'Skip Plane sync'
         required: false
         default: 'false'
         type: boolean
@@ -36,304 +31,167 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 2
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '20'
 
       - name: Sync Task Master to GitHub Issues
         id: github-sync
         uses: actions/github-script@v7
-        env:
-          FORCE_SYNC: ${{ github.event.inputs.force_sync || 'false' }}
         with:
           script: |
             const fs = require('fs');
-            
-            // Status mapping: Task Master → GitHub
             const STATUS_MAP = {
               'pending': { state: 'open', labels: ['tm-task', 'tm-pending'] },
               'in-progress': { state: 'open', labels: ['tm-task', 'tm-in-progress'] },
               'done': { state: 'closed', labels: ['tm-task', 'tm-done'] },
               'blocked': { state: 'open', labels: ['tm-task', 'tm-blocked'] },
-              'deferred': { state: 'open', labels: ['tm-task', 'tm-deferred'] },
-              'cancelled': { state: 'closed', labels: ['tm-task', 'tm-cancelled'] },
-              'review': { state: 'open', labels: ['tm-task', 'tm-review'] }
+              'cancelled': { state: 'closed', labels: ['tm-task', 'tm-cancelled'] }
             };
-            
-            const PRIORITY_LABELS = {
-              'high': 'priority-high',
-              'medium': 'priority-medium', 
-              'low': 'priority-low'
-            };
+            const PRIORITY_LABELS = { 'high': 'priority-high', 'medium': 'priority-medium', 'low': 'priority-low' };
             
             let tasks;
             try {
-              const content = fs.readFileSync('.taskmaster/tasks.json', 'utf8');
-              tasks = JSON.parse(content);
+              tasks = JSON.parse(fs.readFileSync('.taskmaster/tasks.json', 'utf8'));
             } catch (err) {
-              console.log('No tasks.json found or invalid JSON');
+              console.log('No tasks.json found');
               return;
             }
-            
-            if (!tasks.tasks || !Array.isArray(tasks.tasks)) {
-              console.log('No tasks array found');
-              return;
-            }
-            
-            // Store tasks for Plane sync step
-            core.setOutput('tasks_json', JSON.stringify(tasks.tasks));
+            if (!tasks.tasks) return;
             
             const requiredLabels = [
-              { name: 'tm-task', color: '0366d6', description: 'Task Master synced task' },
-              { name: 'tm-pending', color: 'fbca04', description: 'Task status: pending' },
-              { name: 'tm-in-progress', color: '0e8a16', description: 'Task status: in progress' },
-              { name: 'tm-done', color: '6f42c1', description: 'Task status: done' },
-              { name: 'tm-blocked', color: 'd73a4a', description: 'Task status: blocked' },
-              { name: 'tm-deferred', color: 'c5def5', description: 'Task status: deferred' },
-              { name: 'tm-cancelled', color: 'e4e669', description: 'Task status: cancelled' },
-              { name: 'tm-review', color: 'f9d0c4', description: 'Task status: review' },
+              { name: 'tm-task', color: '0366d6', description: 'Task Master task' },
+              { name: 'tm-pending', color: 'fbca04', description: 'Pending' },
+              { name: 'tm-in-progress', color: '0e8a16', description: 'In progress' },
+              { name: 'tm-done', color: '6f42c1', description: 'Done' },
+              { name: 'tm-blocked', color: 'd73a4a', description: 'Blocked' },
+              { name: 'tm-cancelled', color: 'e4e669', description: 'Cancelled' },
               { name: 'priority-high', color: 'b60205', description: 'High priority' },
               { name: 'priority-medium', color: 'fbca04', description: 'Medium priority' },
               { name: 'priority-low', color: '0e8a16', description: 'Low priority' }
             ];
             
             const existingLabels = await github.rest.issues.listLabelsForRepo({
-              owner: context.repo.owner,
-              repo: context.repo.repo
+              owner: context.repo.owner, repo: context.repo.repo
             });
             const existingNames = existingLabels.data.map(l => l.name);
             
             for (const label of requiredLabels) {
               if (!existingNames.includes(label.name)) {
                 try {
-                  await github.rest.issues.createLabel({
-                    owner: context.repo.owner,
-                    repo: context.repo.repo,
-                    ...label
-                  });
-                  console.log(`Created label: ${label.name}`);
-                } catch (e) {
-                  console.log(`Label ${label.name} may already exist`);
-                }
+                  await github.rest.issues.createLabel({ owner: context.repo.owner, repo: context.repo.repo, ...label });
+                } catch (e) { }
               }
             }
             
             const existingIssues = await github.rest.issues.listForRepo({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              labels: 'tm-task',
-              state: 'all',
-              per_page: 100
+              owner: context.repo.owner, repo: context.repo.repo, labels: 'tm-task', state: 'all', per_page: 100
             });
             
             const taskIssueMap = new Map();
             for (const issue of existingIssues.data) {
-              const match = issue.body?.match(/<!-- tm:(\d+(?:\.\d+)?) -->/);
-              if (match) {
-                taskIssueMap.set(match[1], issue.number);
-              }
+              const match = issue.body?.match(/<!-- tm:(\d+) -->/);
+              if (match) taskIssueMap.set(match[1], issue.number);
             }
             
             for (const task of tasks.tasks) {
               const taskId = String(task.id);
               const statusConfig = STATUS_MAP[task.status] || STATUS_MAP['pending'];
               const labels = [...statusConfig.labels];
-              if (task.priority && PRIORITY_LABELS[task.priority]) {
-                labels.push(PRIORITY_LABELS[task.priority]);
-              }
+              if (task.priority && PRIORITY_LABELS[task.priority]) labels.push(PRIORITY_LABELS[task.priority]);
               
-              let subtasksMarkdown = '';
-              if (task.subtasks && task.subtasks.length > 0) {
-                subtasksMarkdown = '\n### Subtasks\n';
-                for (const sub of task.subtasks) {
-                  const checked = sub.status === 'done' ? 'x' : ' ';
-                  subtasksMarkdown += `- [${checked}] **${sub.id}**: ${sub.title}\n`;
-                }
-              }
-              
-              let depsMarkdown = '';
-              if (task.dependencies && task.dependencies.length > 0) {
-                depsMarkdown = `**Dependencies:** ${task.dependencies.map(d => `#${d}`).join(', ')}\n\n`;
-              }
-              
-              const body = `## Task Master Task #${taskId}
-
-**Status:** ${task.status}
-**Priority:** ${task.priority || 'medium'}
-${depsMarkdown}
-### Description
-${task.description || task.title}
-
-### Details
-${task.details || '_No additional details_'}
-${subtasksMarkdown}
----
-*Synced from Task Master AI*
-<!-- tm:${taskId} -->`;
+              const body = [
+                '## Task Master Task #' + taskId,
+                '',
+                '**Status:** ' + task.status,
+                '**Priority:** ' + (task.priority || 'medium'),
+                '',
+                '### Description',
+                task.description || task.title,
+                '',
+                '### Details',
+                task.details || '_No details_',
+                '',
+                '---',
+                '_Synced from Task Master AI_',
+                '<!-- tm:' + taskId + ' -->'
+              ].join('\n');
               
               const existingIssueNumber = taskIssueMap.get(taskId);
               
               if (existingIssueNumber) {
                 await github.rest.issues.update({
-                  owner: context.repo.owner,
-                  repo: context.repo.repo,
-                  issue_number: existingIssueNumber,
-                  title: task.title,
-                  body: body,
-                  state: statusConfig.state,
-                  labels: labels
+                  owner: context.repo.owner, repo: context.repo.repo,
+                  issue_number: existingIssueNumber, title: task.title, body: body,
+                  state: statusConfig.state, labels: labels
                 });
-                console.log(`Updated issue #${existingIssueNumber} for task ${taskId}`);
+                console.log('Updated issue #' + existingIssueNumber + ' for task ' + taskId);
               } else {
                 const newIssue = await github.rest.issues.create({
-                  owner: context.repo.owner,
-                  repo: context.repo.repo,
-                  title: task.title,
-                  body: body,
-                  labels: labels
+                  owner: context.repo.owner, repo: context.repo.repo,
+                  title: task.title, body: body, labels: labels
                 });
-                console.log(`Created issue #${newIssue.data.number} for task ${taskId}`);
-                
+                console.log('Created issue #' + newIssue.data.number + ' for task ' + taskId);
                 if (statusConfig.state === 'closed') {
                   await github.rest.issues.update({
-                    owner: context.repo.owner,
-                    repo: context.repo.repo,
-                    issue_number: newIssue.data.number,
-                    state: 'closed'
+                    owner: context.repo.owner, repo: context.repo.repo,
+                    issue_number: newIssue.data.number, state: 'closed'
                   });
                 }
               }
             }
-            
-            console.log(`Synced ${tasks.tasks.length} tasks to GitHub Issues`);
+            console.log('Synced ' + tasks.tasks.length + ' tasks to GitHub Issues');
 
       - name: Sync to Plane
-        if: ${{ github.event.inputs.skip_plane != 'true' && vars.PLANE_WORKSPACE_SLUG != '' }}
+        if: vars.PLANE_WORKSPACE_SLUG != ''
         env:
           PLANE_API_KEY: ${{ secrets.PLANE_API_KEY }}
-          PLANE_BASE_URL: ${{ vars.PLANE_BASE_URL || 'https://plane.ethospower.org' }}
+          PLANE_BASE_URL: ${{ vars.PLANE_BASE_URL }}
           PLANE_WORKSPACE_SLUG: ${{ vars.PLANE_WORKSPACE_SLUG }}
           PLANE_PROJECT_ID: ${{ vars.PLANE_PROJECT_ID }}
         run: |
-          # Read tasks from file (more reliable than output for large data)
-          TASKS_FILE=".taskmaster/tasks.json"
-          
-          if [ ! -f "$TASKS_FILE" ]; then
-            echo "No tasks.json found, skipping Plane sync"
+          if [ -z "$PLANE_API_KEY" ] || [ -z "$PLANE_PROJECT_ID" ]; then
+            echo "Plane not configured, skipping"
             exit 0
           fi
           
-          if [ -z "$PLANE_API_KEY" ]; then
-            echo "PLANE_API_KEY secret not set, skipping Plane sync"
-            exit 0
-          fi
+          echo "Syncing to Plane: $PLANE_WORKSPACE_SLUG"
           
-          if [ -z "$PLANE_PROJECT_ID" ]; then
-            echo "PLANE_PROJECT_ID variable not set, skipping Plane sync"
-            exit 0
-          fi
-          
-          echo "Syncing to Plane workspace: $PLANE_WORKSPACE_SLUG"
-          
-          # Get project states for status mapping
           STATES=$(curl -s -H "X-API-Key: $PLANE_API_KEY" \
             "$PLANE_BASE_URL/api/v1/workspaces/$PLANE_WORKSPACE_SLUG/projects/$PLANE_PROJECT_ID/states/")
           
-          # Extract state IDs
-          BACKLOG_STATE=$(echo "$STATES" | jq -r '.results[] | select(.group == "backlog") | .id' | head -1)
-          TODO_STATE=$(echo "$STATES" | jq -r '.results[] | select(.group == "unstarted") | .id' | head -1)
-          INPROGRESS_STATE=$(echo "$STATES" | jq -r '.results[] | select(.group == "started") | .id' | head -1)
-          DONE_STATE=$(echo "$STATES" | jq -r '.results[] | select(.group == "completed") | .id' | head -1)
-          CANCELLED_STATE=$(echo "$STATES" | jq -r '.results[] | select(.group == "cancelled") | .id' | head -1)
+          BACKLOG=$(echo "$STATES" | jq -r '.results[] | select(.group == "backlog") | .id' | head -1)
+          STARTED=$(echo "$STATES" | jq -r '.results[] | select(.group == "started") | .id' | head -1)
+          DONE=$(echo "$STATES" | jq -r '.results[] | select(.group == "completed") | .id' | head -1)
           
-          echo "State IDs: Backlog=$BACKLOG_STATE, Todo=$TODO_STATE, InProgress=$INPROGRESS_STATE, Done=$DONE_STATE"
-          
-          # Get existing work items to check for updates vs creates
           EXISTING=$(curl -s -H "X-API-Key: $PLANE_API_KEY" \
             "$PLANE_BASE_URL/api/v1/workspaces/$PLANE_WORKSPACE_SLUG/projects/$PLANE_PROJECT_ID/work-items/?per_page=100")
           
-          # Process each task
-          jq -c '.tasks[]' "$TASKS_FILE" | while read -r task; do
-            TASK_ID=$(echo "$task" | jq -r '.id')
+          jq -c '.tasks[]' .taskmaster/tasks.json | while read -r task; do
+            TID=$(echo "$task" | jq -r '.id')
             TITLE=$(echo "$task" | jq -r '.title')
             STATUS=$(echo "$task" | jq -r '.status')
-            PRIORITY=$(echo "$task" | jq -r '.priority // "medium"')
-            DESCRIPTION=$(echo "$task" | jq -r '.description // .title')
-            DETAILS=$(echo "$task" | jq -r '.details // ""')
+            DESC=$(echo "$task" | jq -r '.description // .title')
             
-            # Map Task Master status to Plane state
             case "$STATUS" in
-              "pending")    STATE_ID="$BACKLOG_STATE" ;;
-              "in-progress") STATE_ID="$INPROGRESS_STATE" ;;
-              "done")       STATE_ID="$DONE_STATE" ;;
-              "blocked")    STATE_ID="$TODO_STATE" ;;
-              "deferred")   STATE_ID="$BACKLOG_STATE" ;;
-              "cancelled")  STATE_ID="$CANCELLED_STATE" ;;
-              "review")     STATE_ID="$INPROGRESS_STATE" ;;
-              *)            STATE_ID="$BACKLOG_STATE" ;;
+              "in-progress") STATE="$STARTED" ;;
+              "done") STATE="$DONE" ;;
+              *) STATE="$BACKLOG" ;;
             esac
             
-            # Map priority
-            case "$PRIORITY" in
-              "high")   PLANE_PRIORITY="urgent" ;;
-              "medium") PLANE_PRIORITY="medium" ;;
-              "low")    PLANE_PRIORITY="low" ;;
-              *)        PLANE_PRIORITY="medium" ;;
-            esac
+            EXT_ID="tm-$TID"
+            EXIST_ID=$(echo "$EXISTING" | jq -r --arg eid "$EXT_ID" '.results[] | select(.external_id == $eid) | .id' | head -1)
             
-            # Build description HTML
-            DESC_HTML="<p><strong>Task Master ID:</strong> $TASK_ID</p><p>$DESCRIPTION</p>"
-            if [ -n "$DETAILS" ] && [ "$DETAILS" != "null" ]; then
-              DESC_HTML="$DESC_HTML<h3>Details</h3><p>$DETAILS</p>"
-            fi
+            PAYLOAD=$(jq -n --arg n "$TITLE" --arg d "<p>$DESC</p>" --arg s "$STATE" --arg e "$EXT_ID" \
+              '{name:$n, description_html:$d, state:$s, external_id:$e, external_source:"taskmaster"}')
             
-            # Check if work item exists (by external_id or name match)
-            EXISTING_ID=$(echo "$EXISTING" | jq -r --arg tid "tm-$TASK_ID" \
-              '.results[] | select(.external_id == $tid) | .id' | head -1)
-            
-            if [ -z "$EXISTING_ID" ] || [ "$EXISTING_ID" == "null" ]; then
-              # Check by name as fallback
-              EXISTING_ID=$(echo "$EXISTING" | jq -r --arg title "$TITLE" \
-                '.results[] | select(.name == $title) | .id' | head -1)
-            fi
-            
-            # Prepare JSON payload
-            PAYLOAD=$(jq -n \
-              --arg name "$TITLE" \
-              --arg desc "$DESC_HTML" \
-              --arg state "$STATE_ID" \
-              --arg priority "$PLANE_PRIORITY" \
-              --arg extid "tm-$TASK_ID" \
-              '{
-                name: $name,
-                description_html: $desc,
-                state: $state,
-                priority: $priority,
-                external_id: $extid,
-                external_source: "taskmaster"
-              }')
-            
-            if [ -n "$EXISTING_ID" ] && [ "$EXISTING_ID" != "null" ]; then
-              # Update existing work item
-              echo "Updating Plane work item $EXISTING_ID for task $TASK_ID"
-              curl -s -X PATCH \
-                -H "X-API-Key: $PLANE_API_KEY" \
-                -H "Content-Type: application/json" \
-                "$PLANE_BASE_URL/api/v1/workspaces/$PLANE_WORKSPACE_SLUG/projects/$PLANE_PROJECT_ID/work-items/$EXISTING_ID/" \
+            if [ -n "$EXIST_ID" ] && [ "$EXIST_ID" != "null" ]; then
+              echo "Updating Plane item $EXIST_ID for task $TID"
+              curl -s -X PATCH -H "X-API-Key: $PLANE_API_KEY" -H "Content-Type: application/json" \
+                "$PLANE_BASE_URL/api/v1/workspaces/$PLANE_WORKSPACE_SLUG/projects/$PLANE_PROJECT_ID/work-items/$EXIST_ID/" \
                 -d "$PAYLOAD" > /dev/null
             else
-              # Create new work item
-              echo "Creating Plane work item for task $TASK_ID: $TITLE"
-              curl -s -X POST \
-                -H "X-API-Key: $PLANE_API_KEY" \
-                -H "Content-Type: application/json" \
+              echo "Creating Plane item for task $TID"
+              curl -s -X POST -H "X-API-Key: $PLANE_API_KEY" -H "Content-Type: application/json" \
                 "$PLANE_BASE_URL/api/v1/workspaces/$PLANE_WORKSPACE_SLUG/projects/$PLANE_PROJECT_ID/work-items/" \
                 -d "$PAYLOAD" > /dev/null
             fi
           done
-          
           echo "Plane sync complete"
