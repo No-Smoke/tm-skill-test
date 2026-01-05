@@ -14,9 +14,11 @@
       "id": 2,
       "title": "Deploy GitHub Actions Workflow for Task Sync",
       "description": "Create .github/workflows/taskmaster-sync.yml to sync Task Master tasks to GitHub Issues.",
-      "details": "Create workflow file with triggers on push to .taskmaster/tasks.json. Use actions/checkout@v4, setup-node@v4, github-script@v7. Implement task→issue creation with status labels.",
+      "details": "Create workflow file with triggers on push to .taskmaster/tasks.json. Use actions/checkout@v4, setup-node@v4, github-script@v7. Implement task\u2192issue creation with status labels.",
       "priority": "high",
-      "dependencies": [1],
+      "dependencies": [
+        1
+      ],
       "status": "done",
       "subtasks": []
     },
@@ -26,7 +28,9 @@
       "description": "Set up Task Master in project with sample tasks to test sync functionality.",
       "details": "Initialize Task Master config. Parse PRD to generate tasks. Ensure tasks have IDs and status fields for sync testing.",
       "priority": "high",
-      "dependencies": [1],
+      "dependencies": [
+        1
+      ],
       "status": "done",
       "subtasks": []
     },
@@ -36,8 +40,11 @@
       "description": "Test automatic creation of GitHub Issues from Task Master tasks and status propagation.",
       "details": "Push tasks.json to trigger workflow. Verify Issues created with correct labels. Check status sync works.",
       "priority": "medium",
-      "dependencies": [2, 3],
-      "status": "in-progress",
+      "dependencies": [
+        2,
+        3
+      ],
+      "status": "done",
       "subtasks": []
     },
     {
@@ -46,8 +53,10 @@
       "description": "Set up OpenProject project with tm-op-sync for work package sync.",
       "details": "Create OpenProject project. Configure tm-op-sync tool. Verify work packages created from tasks.",
       "priority": "medium",
-      "dependencies": [4],
-      "status": "pending",
+      "dependencies": [
+        4
+      ],
+      "status": "in-progress",
       "subtasks": []
     }
   ]
